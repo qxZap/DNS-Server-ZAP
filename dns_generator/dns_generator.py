@@ -1,11 +1,49 @@
 import json
 import os
+import socket
 
 QUESTION_TYPES = {
     b"\x00\x01": "a"
 }
 ZONES = {}  # Holds hostname -> record data, cannot grow as server runs
 
+def createRecords(domain_ip,ttl=400,name='@'):
+    return {'name':name,'ttl':ttl,'value':domain_ip}
+
+def getCustomRecordsForIP(domain_ip,ttl=400,name='@'):
+    return [createRecords(domain_ip,ttl,name),createRecords('192.168.0.1',ttl,name)]
+
+def getIpFromBytes(bytes):
+    domain = []
+    expected_size = None
+    domain_component = ""
+    byteRead = 0
+    total_bytes_read=0
+    for byte in bytes:
+        if expected_size == None:
+            expected_size = byte
+            byteRead = 0
+        else:
+            if byteRead < expected_size:
+                domain_component+=chr(byte)
+                byteRead +=1
+            else:
+                domain.append(domain_component)
+                expected_size=byte
+                byteRead = 0
+                domain_component=""
+        if byte == 0:
+            break
+        total_bytes_read+=1
+    return domain , bytes[total_bytes_read:total_bytes_read+2]           
+
+def DNStoIP(domain_name):
+    domain_ip = None
+    try:
+        domain_ip = socket.gethostbyname(domain_name)
+    except socket.gaierror:
+        domain_ip = None
+    return domain_ip
 
 def load_zones():
     global ZONES
@@ -25,7 +63,6 @@ def load_zones():
     return json_zone
 ZONES = load_zones()
 
-
 def get_zone(domain):
         global ZONES
         zone_name = ".".join(domain)
@@ -35,7 +72,6 @@ def get_zone(domain):
         except KeyError:
             return None
         return zone
-
 
 class DNSGen(object):
 
@@ -70,37 +106,11 @@ class DNSGen(object):
         return flags1 + flags2
 
     def _get_question_domain_type(self, data):
+        domain , question_type = getIpFromBytes(data)
+        self.domain = domain
         self.format_error = 0
-        state = 0   # 1 = parsing for text labels, 0 = update length of next text to parse
-        expected_length = 0
-        domain_string = ""
-        domain_parts = []
-        question_type = None
-        x = 0   # count to see if we reach end of subtext to parse
-        y = 0   # count number of bytes
-        try:
-            for byte in data:
-                if state == 1:
-                    if byte != 0:   # domain name not ended so add chars
-                        domain_string += chr(byte)
-                    x += 1
-                    if x == expected_length:    # got to end of this label
-                        domain_parts.append(domain_string)
-                        domain_string = ""
-                        state = 0   # ensure that next loop captures the byte length of the next label
-                    if byte == 0:   # Check if we have reached the end of the question domain
-                        domain_parts.append(domain_string)
-                        break
-                else:
-                    state = 1
-                    expected_length = byte
-                y += 1
-            question_type = data[y:y+2]    # after the domain the next 2 bytes are question type
-            self.domain = ".".join(domain_parts)
-        except IndexError:
-            self.format_error = 1
-        finally:
-            return domain_parts, question_type
+
+        return domain , question_type
 
     def _get_records(self, data):
         domain, question_type = self._get_question_domain_type(data)
@@ -118,15 +128,22 @@ class DNSGen(object):
 
     @staticmethod
     def _record_to_bytes(domain_name, record_type, record_ttl, record_value):
+        plain = "\xc0\x0c"
         resp = b"\xc0\x0c"
         if record_type == "a":
+            plain+="\x00\x01"
             resp += b"\x00\x01"
         resp += b"\x00\x01"    # class IN
+        plain+="\x00\x01"
         resp += int(record_ttl).to_bytes(4, byteorder="big")    # ttl in bytes
+        plain+= str(int(record_ttl))
         if record_type == "a":
+            plain+="\x00\x04" 
             resp += b"\x00\x04"    # IP length
             for part in record_value.split("."):
+                plain+=str([int(part)])
                 resp += bytes([int(part)])
+        # print(plain)
         return resp
 
     def _make_header(self, records_length):
@@ -160,13 +177,19 @@ class DNSGen(object):
             return resp
         for record in records:
             resp += self._record_to_bytes(domain_name, record_type, record["ttl"], record["value"])
+
         return resp
 
     def make_response(self):
         records, record_type, domain_name = self._get_records(self.data[12:])
-        return self._make_header(len(records)) + self._make_question(len(records), record_type, domain_name) +\
-               self._make_answer(records, record_type, domain_name)
-
+        if records == []:
+            domain_ip = DNStoIP('.'.join(domain_name))
+            if( domain_ip != None):
+                records = getCustomRecordsForIP(domain_ip)
+        header = self._make_header(len(records))
+        question = self._make_question(len(records), record_type, domain_name)
+        answer = self._make_answer(records, record_type, domain_name)
+        return  header + question + answer
 
 if __name__ == "__main__":
     pass
