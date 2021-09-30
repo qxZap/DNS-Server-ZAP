@@ -1,5 +1,5 @@
 # DNS Server
-<img src="https://hide.me/resources/156/images/no-dns-icon@2x.png" width="100" height="100">
+<img src="https://i.pcmag.com/imagery/articles/07CSW87UwsoIIArA9sMZXft-6..1569491760.jpg" width="400" height="250">
 
 A Domain Name Server that allows you to use your own domain name IP address mappings.
 This could be used within private networks to simplify sharing of resources within the network.
